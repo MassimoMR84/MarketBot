@@ -14,8 +14,13 @@
 import streamlit as st
 import os
 import json
+import uuid
+from datetime import datetime as dt
 import database
 from agents import orchestrator
+
+# Limite de tamaño de imagen (5MB es suficiente para Claude)
+MAX_IMAGE_SIZE_MB = 5
 
 # ============================================================
 # CONFIGURACION INICIAL
@@ -108,104 +113,120 @@ if pantalla == "📸 Nuevo producto":
             # Leer los bytes de la imagen
             imagen_bytes = imagen.getvalue()
 
-            # Guardar la imagen en disco
-            nombre_archivo = f"uploads/{imagen.name}"
-            with open(nombre_archivo, "wb") as f:
-                f.write(imagen_bytes)
+            # FIX #3: Validar tamaño de imagen
+            tamano_mb = len(imagen_bytes) / (1024 * 1024)
+            if tamano_mb > MAX_IMAGE_SIZE_MB:
+                st.error(f"❌ La imagen pesa {tamano_mb:.1f}MB. El máximo es {MAX_IMAGE_SIZE_MB}MB. Usá una foto más liviana.")
+            else:
+                # FIX #2: Nombre unico para evitar que archivos se pisen
+                extension = os.path.splitext(imagen.name)[1] or ".jpg"
+                nombre_unico = f"{uuid.uuid4().hex[:8]}_{dt.now().strftime('%Y%m%d%H%M%S')}{extension}"
+                nombre_archivo = f"uploads/{nombre_unico}"
+
+                with open(nombre_archivo, "wb") as f:
+                    f.write(imagen_bytes)
 
             # Mostrar un spinner mientras la IA trabaja
             # (esto puede tardar 10-20 segundos)
-            with st.spinner("🧠 La IA está analizando tu producto... Esto puede tardar unos segundos."):
+                with st.spinner("🧠 La IA está analizando tu producto... Esto puede tardar unos segundos."):
 
-                # ACA ES DONDE PASA LA MAGIA
-                # El orchestrator llama a Vision → SEO + Pricing + Copy
-                producto_id, resultados = orchestrator.procesar_producto(
-                    imagen_bytes=imagen_bytes,
-                    contexto_usuario=contexto
-                )
+                    # ACA ES DONDE PASA LA MAGIA
+                    # El orchestrator llama a Vision → SEO + Pricing + Copy
+                    producto_id, resultados = orchestrator.procesar_producto(
+                        imagen_bytes=imagen_bytes,
+                        contexto_usuario=contexto
+                    )
 
-            # --- Mostrar resultados ---
-            if producto_id:
-                st.success(f"✅ ¡Producto procesado! ID: {producto_id}")
+                # --- Mostrar resultados ---
+                if producto_id:
+                    st.success(f"✅ ¡Producto procesado! ID: {producto_id}")
 
-                # Actualizar la ruta de la imagen en la base de datos
-                database.actualizar_producto(producto_id, {
-                    "imagen_path": nombre_archivo
-                })
+                    # Actualizar la ruta de la imagen en la base de datos
+                    database.actualizar_producto(producto_id, {
+                        "imagen_path": nombre_archivo
+                    })
 
-                # Mostrar lo que genero cada agente en columnas
-                # st.columns divide la pantalla en columnas lado a lado
-                col1, col2 = st.columns(2)
+                    # Mostrar lo que genero cada agente en columnas
+                    col1, col2 = st.columns(2)
 
-                with col1:
-                    # --- Vision ---
-                    st.subheader("🔍 Atributos detectados")
-                    vision = resultados.get("vision", {})
-                    st.markdown(f"**Producto:** {vision.get('nombre_producto', 'N/A')}")
-                    st.markdown(f"**Categoría:** {vision.get('categoria', 'N/A')}")
-                    st.markdown(f"**Marca:** {vision.get('marca', 'N/A')}")
-                    st.markdown(f"**Estado:** {vision.get('estado', 'N/A')}")
-                    st.markdown(f"**Confianza IA:** {vision.get('confianza', 0):.0%}")
+                    with col1:
+                        # --- Vision ---
+                        st.subheader("🔍 Atributos detectados")
+                        vision = resultados.get("vision", {})
+                        st.markdown(f"**Producto:** {vision.get('nombre_producto', 'N/A')}")
+                        st.markdown(f"**Categoría:** {vision.get('categoria', 'N/A')}")
+                        st.markdown(f"**Marca:** {vision.get('marca', 'N/A')}")
+                        st.markdown(f"**Estado:** {vision.get('estado', 'N/A')}")
+                        # FIX #4: Manejar confianza de forma segura
+                        confianza = vision.get('confianza', 0)
+                        try:
+                            st.markdown(f"**Confianza IA:** {float(confianza):.0%}")
+                        except (ValueError, TypeError):
+                            st.markdown(f"**Confianza IA:** {confianza}")
 
-                    # --- SEO ---
-                    st.subheader("🔎 SEO")
-                    seo_r = resultados.get("seo", {})
-                    st.markdown(f"**Título:** {seo_r.get('titulo', 'N/A')}")
-                    st.markdown(f"**Keywords:** {', '.join(seo_r.get('keywords', []))}")
+                        # --- SEO ---
+                        st.subheader("🔎 SEO")
+                        seo_r = resultados.get("seo", {})
+                        st.markdown(f"**Título:** {seo_r.get('titulo', 'N/A')}")
+                        keywords = seo_r.get('keywords', [])
+                        if isinstance(keywords, list):
+                            st.markdown(f"**Keywords:** {', '.join(str(k) for k in keywords)}")
+                        else:
+                            st.markdown(f"**Keywords:** {keywords}")
 
-                with col2:
-                    # --- Pricing ---
-                    st.subheader("💰 Análisis de precios")
-                    pricing_r = resultados.get("pricing", {})
+                    with col2:
+                        # --- Pricing ---
+                        st.subheader("💰 Análisis de precios")
+                        pricing_r = resultados.get("pricing", {})
 
-                    # Indicar fuente de datos
-                    if pricing_r.get("fuente") == "estimacion IA":
-                        st.caption("⚠️ Precios estimados por IA (MeLi API no disponible)")
-                        if pricing_r.get("nota"):
-                            st.caption(f"ℹ️ {pricing_r.get('nota')}")
-                    elif pricing_r.get("productos_analizados", 0) > 0:
-                        st.caption(f"✅ Datos reales de MercadoLibre ({pricing_r.get('productos_analizados')} productos analizados)")
+                        # Indicar fuente de datos
+                        if pricing_r.get("fuente") == "estimacion IA":
+                            st.caption("⚠️ Precios estimados por IA (MeLi API no disponible)")
+                            if pricing_r.get("nota"):
+                                st.caption(f"ℹ️ {pricing_r.get('nota')}")
+                        elif pricing_r.get("productos_analizados", 0) > 0:
+                            st.caption(f"✅ Datos reales de MercadoLibre ({pricing_r.get('productos_analizados')} productos analizados)")
 
-                    st.markdown(f"**Precio sugerido:** ${pricing_r.get('precio_sugerido', 'N/A')}")
-                    st.markdown(f"**Rango:** ${pricing_r.get('precio_minimo', 0)} — ${pricing_r.get('precio_maximo', 0)}")
-                    st.markdown(f"**Promedio mercado:** ${pricing_r.get('precio_promedio', 0)}")
-                    st.markdown(f"**Mediana:** ${pricing_r.get('precio_mediana', 0)}")
+                        st.markdown(f"**Precio sugerido:** ${pricing_r.get('precio_sugerido', 'N/A')}")
+                        st.markdown(f"**Rango:** ${pricing_r.get('precio_minimo', 0)} — ${pricing_r.get('precio_maximo', 0)}")
+                        st.markdown(f"**Promedio mercado:** ${pricing_r.get('precio_promedio', 0)}")
+                        st.markdown(f"**Mediana:** ${pricing_r.get('precio_mediana', 0)}")
 
-                    # --- Copy ---
-                    st.subheader("✍️ Copy de marketing")
-                    copy_r = resultados.get("copy", {})
-                    st.markdown(f"**CTA:** {copy_r.get('cta', 'N/A')}")
+                        # --- Copy ---
+                        st.subheader("✍️ Copy de marketing")
+                        copy_r = resultados.get("copy", {})
+                        st.markdown(f"**CTA:** {copy_r.get('cta', 'N/A')}")
 
-                # Descripcion completa abajo (ocupa mas espacio)
-                st.subheader("📝 Descripción generada")
-                st.text_area(
-                    "Descripción",
-                    value=copy_r.get("descripcion", ""),
-                    height=200,
-                    disabled=True,
-                    label_visibility="collapsed"
-                )
+                    # Descripcion completa abajo (ocupa mas espacio)
+                    st.subheader("📝 Descripción generada")
+                    st.text_area(
+                        "Descripción",
+                        value=copy_r.get("descripcion", ""),
+                        height=200,
+                        disabled=True,
+                        label_visibility="collapsed"
+                    )
 
-                # Mensaje para ir a revisar
-                st.info("👉 Andá a **Revisar productos** en el menú de la izquierda para editar y aprobar.")
+                    # Mensaje para ir a revisar
+                    st.info("👉 Andá a **Revisar productos** en el menú de la izquierda para editar y aprobar.")
 
-                # Mostrar errores si hubo
-                if resultados.get("errores"):
-                    with st.expander("⚠️ Errores durante el proceso"):
-                        for error in resultados["errores"]:
-                            st.warning(error)
-            else:
-                # Mostrar razon especifica si la hay
-                errores = resultados.get("errores", [])
-                no_producto = [e for e in errores if "No es un producto" in e]
-                if no_producto:
-                    st.warning("⚠️ " + no_producto[0])
-                    st.info("Subí una foto de un producto que quieras vender (un objeto físico: ropa, electrónica, muebles, etc.)")
+                    # Mostrar errores si hubo
+                    if resultados.get("errores"):
+                        with st.expander("⚠️ Errores durante el proceso"):
+                            for error in resultados["errores"]:
+                                st.warning(error)
                 else:
-                    st.error("❌ Hubo un problema procesando el producto.")
-                    if errores:
-                        for error in errores:
-                            st.warning(error)
+                    # Mostrar razon especifica si la hay
+                    errores = resultados.get("errores", [])
+                    no_producto = [e for e in errores if "No es un producto" in e]
+                    if no_producto:
+                        st.warning("⚠️ " + no_producto[0])
+                        st.info("Subí una foto de un producto que quieras vender (un objeto físico: ropa, electrónica, muebles, etc.)")
+                    else:
+                        st.error("❌ Hubo un problema procesando el producto.")
+                        if errores:
+                            for error in errores:
+                                st.warning(error)
 
 
 # ============================================================

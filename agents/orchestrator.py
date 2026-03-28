@@ -83,7 +83,7 @@ def procesar_producto(imagen_bytes, contexto_usuario=""):
         # Esperar a que terminen y recoger resultados
         # SEO
         try:
-            resultados["seo"] = tarea_seo.result(timeout=30)
+            resultados["seo"] = tarea_seo.result(timeout=60)
             print(f"   ✓ SEO: {resultados['seo'].get('titulo', '?')}")
         except Exception as e:
             resultados["errores"].append(f"SEO Node fallo: {str(e)}")
@@ -96,7 +96,7 @@ def procesar_producto(imagen_bytes, contexto_usuario=""):
 
         # PRICING
         try:
-            resultados["pricing"] = tarea_pricing.result(timeout=30)
+            resultados["pricing"] = tarea_pricing.result(timeout=60)
             print(f"   ✓ Pricing: ${resultados['pricing'].get('precio_sugerido', '?')}")
         except Exception as e:
             resultados["errores"].append(f"Pricing Node fallo: {str(e)}")
@@ -111,7 +111,7 @@ def procesar_producto(imagen_bytes, contexto_usuario=""):
 
         # COPY
         try:
-            resultados["copy"] = tarea_copy.result(timeout=30)
+            resultados["copy"] = tarea_copy.result(timeout=60)
             print(f"   ✓ Copy generado ({resultados['copy'].get('tono', '?')})")
         except Exception as e:
             resultados["errores"].append(f"Copy Node fallo: {str(e)}")

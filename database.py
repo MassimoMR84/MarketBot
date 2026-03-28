@@ -92,39 +92,41 @@ def guardar_producto(imagen_path, contexto, atributos, seo, pricing, copy_data):
     Retorna: el ID del producto creado
     """
     conexion = conectar()
-    cursor = conexion.cursor()
+    try:
+        cursor = conexion.cursor()
 
-    cursor.execute("""
-        INSERT INTO productos (
-            imagen_path, contexto, atributos,
-            titulo, descripcion_seo, keywords,
-            precio_sugerido, precio_minimo, precio_maximo,
-            precio_promedio, precio_mediana, datos_mercado,
-            descripcion_marketing, call_to_action,
-            estado, fecha_creacion
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendiente', ?)
-    """, (
-        imagen_path,
-        contexto,
-        json.dumps(atributos, ensure_ascii=False),
-        seo.get("titulo", ""),
-        seo.get("descripcion", ""),
-        json.dumps(seo.get("keywords", []), ensure_ascii=False),
-        pricing.get("precio_sugerido"),
-        pricing.get("precio_minimo"),
-        pricing.get("precio_maximo"),
-        pricing.get("precio_promedio"),
-        pricing.get("precio_mediana"),
-        json.dumps(pricing.get("datos_mercado", {}), ensure_ascii=False),
-        copy_data.get("descripcion", ""),
-        copy_data.get("cta", ""),
-        datetime.now().isoformat()
-    ))
+        cursor.execute("""
+            INSERT INTO productos (
+                imagen_path, contexto, atributos,
+                titulo, descripcion_seo, keywords,
+                precio_sugerido, precio_minimo, precio_maximo,
+                precio_promedio, precio_mediana, datos_mercado,
+                descripcion_marketing, call_to_action,
+                estado, fecha_creacion
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendiente', ?)
+        """, (
+            imagen_path,
+            contexto,
+            json.dumps(atributos, ensure_ascii=False),
+            seo.get("titulo", ""),
+            seo.get("descripcion", ""),
+            json.dumps(seo.get("keywords", []), ensure_ascii=False),
+            pricing.get("precio_sugerido"),
+            pricing.get("precio_minimo"),
+            pricing.get("precio_maximo"),
+            pricing.get("precio_promedio"),
+            pricing.get("precio_mediana"),
+            json.dumps(pricing.get("datos_mercado", {}), ensure_ascii=False),
+            copy_data.get("descripcion", ""),
+            copy_data.get("cta", ""),
+            datetime.now().isoformat()
+        ))
 
-    producto_id = cursor.lastrowid
-    conexion.commit()
-    conexion.close()
-    return producto_id
+        producto_id = cursor.lastrowid
+        conexion.commit()
+        return producto_id
+    finally:
+        conexion.close()
 
 
 def obtener_pendientes():
@@ -157,16 +159,33 @@ def actualizar_producto(producto_id, campos):
     Actualiza los campos que el humano edito.
     'campos' es un diccionario, ej: {"titulo": "Nuevo titulo", "precio_sugerido": 15000}
     """
+    # FIX: Validar que los campos sean columnas reales de la tabla
+    # Esto previene SQL injection (un ataque donde alguien mete
+    # codigo malicioso en los nombres de los campos)
+    campos_permitidos = {
+        "imagen_path", "contexto", "atributos",
+        "titulo", "descripcion_seo", "keywords",
+        "precio_sugerido", "precio_minimo", "precio_maximo",
+        "precio_promedio", "precio_mediana", "datos_mercado",
+        "descripcion_marketing", "call_to_action",
+        "estado", "plataforma"
+    }
+
+    # Filtrar solo campos validos
+    campos_seguros = {k: v for k, v in campos.items() if k in campos_permitidos}
+
+    if not campos_seguros:
+        return  # No hay nada valido que actualizar
+
     conexion = conectar()
-    cursor = conexion.cursor()
-
-    # Construye el SQL dinamicamente segun que campos se editaron
-    sets = ", ".join(f"{key} = ?" for key in campos.keys())
-    valores = list(campos.values()) + [producto_id]
-
-    cursor.execute(f"UPDATE productos SET {sets} WHERE id = ?", valores)
-    conexion.commit()
-    conexion.close()
+    try:
+        cursor = conexion.cursor()
+        sets = ", ".join(f"{key} = ?" for key in campos_seguros.keys())
+        valores = list(campos_seguros.values()) + [producto_id]
+        cursor.execute(f"UPDATE productos SET {sets} WHERE id = ?", valores)
+        conexion.commit()
+    finally:
+        conexion.close()
 
 
 def aprobar_producto(producto_id):
