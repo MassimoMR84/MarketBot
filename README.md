@@ -1,6 +1,6 @@
-# 🚀 Listify — Publicá con IA en segundos
+# 🚀 Orquesta — Publicá con IA en segundos
 
-**Listify** es un orquestador de agentes de IA que transforma una simple foto de un producto en una publicación profesional de ecommerce lista para vender. Subís una foto, la IA genera todo, vos revisás y publicás. Así de simple.
+**Orquesta** es un orquestador de agentes de IA que transforma una simple foto de un producto en una publicación profesional de ecommerce lista para vender. Subís una foto, la IA genera todo, vos revisás y publicás. Así de simple.
 
 > 🏆 Proyecto desarrollado en hackathon — MVP funcional en 28 horas.
 
@@ -12,7 +12,7 @@ Millones de personas en Latinoamérica quieren vender online pero se quedan para
 
 ## 💡 La solución
 
-Listify elimina la parálisis operativa con un sistema de **agentes de IA especializados** que trabajan en paralelo:
+Orquesta elimina la parálisis operativa con un sistema de **agentes de IA especializados** que trabajan en paralelo:
 
 1. **Subís una foto** de tu producto (y opcionalmente un contexto breve)
 2. **4 agentes de IA trabajan en simultáneo** para generar todo lo necesario
@@ -25,7 +25,7 @@ Lo que antes tomaba 30-60 minutos, ahora toma 30 segundos + tu revisión.
 
 ## 🧠 Arquitectura de agentes
 
-Listify funciona como un **orquestador de agentes especializados**, cada uno experto en una tarea:
+Orquesta funciona como un **orquestador de agentes especializados**, cada uno experto en una tarea:
 
 ```
                     ┌─────────────┐
@@ -163,7 +163,7 @@ listify/
 
 ## 🌎 Escalabilidad y visión
 
-Listify fue diseñado desde el día cero para ser **agnóstico a plataformas e idiomas**:
+Orquesta fue diseñado desde el día cero para ser **agnóstico a plataformas e idiomas**:
 
 - **Multi-plataforma**: La arquitectura modular permite agregar nuevos marketplaces (Tiendanube, Facebook Marketplace, Amazon, Shopify) creando un nuevo módulo en la carpeta correspondiente sin tocar el resto del código.
 - **Multi-idioma**: Claude maneja +50 idiomas nativamente. Cambiar el mercado es tan simple como cambiar `MELI_SITE_ID` en la configuración (MLA → Argentina, MLB → Brasil, MLM → México).
