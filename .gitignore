@@ -1,0 +1,29 @@
+# ========== SECRETOS — NUNCA subir ==========
+config.py
+
+# ========== Base de datos local ==========
+*.db
+
+# ========== Imagenes subidas por usuarios ==========
+uploads/
+
+# ========== Python cache ==========
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# ========== Entornos virtuales ==========
+venv/
+env/
+.env
+
+# ========== IDE / Editor ==========
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ========== OS ==========
+.DS_Store
+Thumbs.db
