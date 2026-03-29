@@ -75,6 +75,60 @@ def obtener_config_sitio():
 
 
 # ============================================================
+# BUSQUEDA VIA API PUBLICA (sin token)
+# ============================================================
+# La API publica de MeLi funciona sin autenticacion para buscar.
+# Desde servidores cloud (Streamlit Cloud, Heroku, etc.) suele
+# funcionar mejor que el scraping porque no depende del HTML.
+# ============================================================
+
+def buscar_api_publica(query, max_resultados=20):
+    """
+    Busca productos via la API publica de MeLi (sin token).
+    Funciona mejor desde servidores cloud.
+    """
+    site_config = obtener_config_sitio()
+    site_id = getattr(config, "MELI_SITE_ID", "MLA")
+
+    url = f"https://api.mercadolibre.com/sites/{site_id}/search"
+    params = {
+        "q": query,
+        "limit": max_resultados,
+        "sort": "relevance"
+    }
+    headers = {
+        "User-Agent": "Orquesta/1.0",
+        "Accept": "application/json",
+    }
+
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            print(f"   ⚠️ API MeLi: status {resp.status_code}")
+            return []
+
+        datos = resp.json()
+        productos = []
+        for item in datos.get("results", []):
+            precio = item.get("price", 0)
+            titulo = item.get("title", "")
+            if titulo and precio and precio > 0:
+                productos.append({
+                    "titulo": titulo,
+                    "precio": precio,
+                    "moneda": item.get("currency_id", site_config["moneda"]),
+                    "fuente": site_config["plataforma"],
+                })
+
+        print(f"   🔍 API MeLi: {len(productos)} resultados para '{query}'")
+        return productos
+
+    except requests.RequestException as e:
+        print(f"   ❌ Error API MeLi: {e}")
+        return []
+
+
+# ============================================================
 # SCRAPING DE MERCADOLIBRE WEB
 # ============================================================
 
@@ -262,19 +316,31 @@ def analizar_precios(atributos):
             f"{nombre} {categoria}".strip(),
         ]
 
-    # 2. Probar cada busqueda hasta encontrar resultados
+    # 2. Probar cada busqueda: primero API publica, si falla scraping
     productos_encontrados = []
     query_usada = ""
+    fuente_usada = ""
 
     for query in busquedas:
         if not query:
             continue
-        productos_encontrados = buscar_mercadolibre(query)
-        stats_temp = calcular_estadisticas(productos_encontrados)
 
+        # Intento 1: API publica (funciona mejor en cloud)
+        productos_encontrados = buscar_api_publica(query)
+        stats_temp = calcular_estadisticas(productos_encontrados)
         if stats_temp["cantidad_encontrados"] > 0 and stats_temp["precio_promedio"] > 0:
             query_usada = query
-            print(f"   📊 Pricing: {stats_temp['cantidad_encontrados']} precios reales con '{query}'")
+            fuente_usada = "API"
+            print(f"   📊 Pricing (API): {stats_temp['cantidad_encontrados']} precios con '{query}'")
+            break
+
+        # Intento 2: Scraping web (funciona mejor en local)
+        productos_encontrados = buscar_mercadolibre(query)
+        stats_temp = calcular_estadisticas(productos_encontrados)
+        if stats_temp["cantidad_encontrados"] > 0 and stats_temp["precio_promedio"] > 0:
+            query_usada = query
+            fuente_usada = "scraping"
+            print(f"   📊 Pricing (scraping): {stats_temp['cantidad_encontrados']} precios con '{query}'")
             break
 
     # 3. Si no encontramos nada, error honesto
