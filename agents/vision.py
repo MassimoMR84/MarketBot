@@ -46,7 +46,7 @@ def analizar_producto(imagen_bytes, contexto_usuario=""):
     FUNCION PRINCIPAL del Vision Node.
     
     Recibe:
-    - imagen_bytes: la foto del producto (en bytes)
+    - imagen_bytes: UNA foto (bytes) o LISTA de fotos ([bytes, bytes, ...])
     - contexto_usuario: texto opcional que escribio el usuario
       (ej: "es una campera de mi marca, talle M")
     
@@ -54,15 +54,45 @@ def analizar_producto(imagen_bytes, contexto_usuario=""):
     - Un diccionario con todos los atributos detectados
     """
 
-    # 1. Preparar la imagen para enviarla a Claude
-    imagen_base64 = codificar_imagen(imagen_bytes)
-    tipo_imagen = detectar_tipo_imagen(imagen_bytes)
+    # 1. Preparar imagen(es) para enviarlas a Claude
+    # Soporta una imagen sola (backwards compatible) o multiples
+    if isinstance(imagen_bytes, list):
+        lista_imagenes = imagen_bytes
+    else:
+        lista_imagenes = [imagen_bytes]
+
+    # Construir los bloques de imagen para el mensaje
+    bloques_imagenes = []
+    for img_bytes in lista_imagenes:
+        img_base64 = codificar_imagen(img_bytes)
+        tipo_img = detectar_tipo_imagen(img_bytes)
+        bloques_imagenes.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": tipo_img,
+                "data": img_base64,
+            },
+        })
 
     # 2. Construir el prompt (la instruccion para Claude)
     #    Este prompt es CLAVE. Le decimos exactamente que queremos.
-    prompt = """Sos un experto en ecommerce y analisis de productos.
+    cantidad_fotos = len(lista_imagenes)
+    intro_fotos = (
+        "Analiza la siguiente imagen de un producto."
+        if cantidad_fotos == 1
+        else f"Analiza las siguientes {cantidad_fotos} imagenes del MISMO producto. "
+             f"Usa TODAS las fotos para obtener la mayor cantidad de detalles posibles "
+             f"(frente, dorso, etiquetas, detalles, estado, etc)."
+    )
 
-PRIMERO evalua si la imagen muestra un PRODUCTO VENDIBLE (algo que se pueda vender en un marketplace como MercadoLibre). 
+    prompt = f"""Sos un experto en ecommerce y analisis de productos.
+
+{intro_fotos}
+
+"""
+
+    prompt += """PRIMERO evalua si la imagen muestra un PRODUCTO VENDIBLE (algo que se pueda vender en un marketplace como MercadoLibre). 
 NO son productos vendibles: selfies, paisajes, capturas de pantalla, memes, mascotas, fotos borrosas irreconocibles, comida preparada casera.
 SI son productos vendibles: cualquier objeto fisico (electronica, ropa, muebles, juguetes, alimentos envasados, bebidas comerciales, etc).
 
@@ -107,8 +137,11 @@ Se preciso y profesional."""
     if contexto_usuario:
         prompt += f"\n\nContexto adicional del vendedor: {contexto_usuario}"
 
-    # 3. Llamar a la API de Claude con la imagen
+    # 3. Llamar a la API de Claude con la(s) imagen(es)
     cliente = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+
+    # Armar contenido: todas las imagenes + el prompt de texto
+    contenido = bloques_imagenes + [{"type": "text", "text": prompt}]
 
     mensaje = cliente.messages.create(
         model=config.CLAUDE_MODEL,
@@ -116,20 +149,7 @@ Se preciso y profesional."""
         messages=[
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": tipo_imagen,
-                            "data": imagen_base64,
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": prompt,
-                    }
-                ],
+                "content": contenido,
             }
         ],
     )

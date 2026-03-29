@@ -83,16 +83,20 @@ st.sidebar.markdown(f"📦 Publicados: **{len(publicados)}**")
 if pantalla == "📸 Nuevo producto":
 
     st.title("📸 Nuevo producto")
-    st.markdown("Subí una foto de tu producto y la IA se encarga del resto.")
+    st.markdown("Subí hasta 3 fotos de tu producto y la IA se encarga del resto.")
 
-    # --- Zona de subir imagen ---
-    # st.file_uploader crea un boton de "subir archivo"
-    # Limitamos a imagenes (jpg, png, webp)
-    imagen = st.file_uploader(
-        "Arrastrá o seleccioná la foto del producto",
+    # --- Zona de subir imagenes (hasta 3) ---
+    imagenes = st.file_uploader(
+        "Arrastrá o seleccioná las fotos del producto (máx. 3)",
         type=["jpg", "jpeg", "png", "webp"],
-        help="Subi una foto clara del producto. Mejor con fondo limpio."
+        accept_multiple_files=True,
+        help="Subí fotos claras del producto. Podés subir frente, dorso, detalles, etiquetas, etc."
     )
+
+    # Limitar a 3 fotos
+    if imagenes and len(imagenes) > 3:
+        st.warning("⚠️ Máximo 3 fotos. Se van a usar las primeras 3.")
+        imagenes = imagenes[:3]
 
     # --- Campo de contexto opcional ---
     contexto = st.text_area(
@@ -102,38 +106,50 @@ if pantalla == "📸 Nuevo producto":
         max_chars=500
     )
 
-    # --- Mostrar preview de la imagen ---
-    if imagen is not None:
-        # Mostrar la foto que subio el usuario
-        st.image(imagen, caption="Vista previa", width=300)
+    # --- Mostrar preview de las imagenes ---
+    if imagenes:
+        # Mostrar previews en columnas
+        cols = st.columns(min(len(imagenes), 3))
+        for i, img in enumerate(imagenes):
+            with cols[i]:
+                st.image(img, caption=f"Foto {i+1}", use_container_width=True)
 
         # --- Boton para procesar ---
         if st.button("🚀 Generar publicación", type="primary", use_container_width=True):
 
-            # Leer los bytes de la imagen
-            imagen_bytes = imagen.getvalue()
+            # Leer bytes de todas las imagenes
+            lista_bytes = []
+            archivos_guardados = []
+            error_tamano = False
 
-            # FIX #3: Validar tamaño de imagen
-            tamano_mb = len(imagen_bytes) / (1024 * 1024)
-            if tamano_mb > MAX_IMAGE_SIZE_MB:
-                st.error(f"❌ La imagen pesa {tamano_mb:.1f}MB. El máximo es {MAX_IMAGE_SIZE_MB}MB. Usá una foto más liviana.")
-            else:
-                # FIX #2: Nombre unico para evitar que archivos se pisen
-                extension = os.path.splitext(imagen.name)[1] or ".jpg"
+            for img in imagenes:
+                img_bytes = img.getvalue()
+                tamano_mb = len(img_bytes) / (1024 * 1024)
+                if tamano_mb > MAX_IMAGE_SIZE_MB:
+                    st.error(f"❌ '{img.name}' pesa {tamano_mb:.1f}MB. El máximo es {MAX_IMAGE_SIZE_MB}MB.")
+                    error_tamano = True
+                    break
+                lista_bytes.append(img_bytes)
+
+                # Guardar cada imagen con nombre unico
+                extension = os.path.splitext(img.name)[1] or ".jpg"
                 nombre_unico = f"{uuid.uuid4().hex[:8]}_{dt.now().strftime('%Y%m%d%H%M%S')}{extension}"
                 nombre_archivo = f"uploads/{nombre_unico}"
-
                 with open(nombre_archivo, "wb") as f:
-                    f.write(imagen_bytes)
+                    f.write(img_bytes)
+                archivos_guardados.append(nombre_archivo)
 
-            # Mostrar un spinner mientras la IA trabaja
-            # (esto puede tardar 10-20 segundos)
+            if not error_tamano:
+                # Mostrar un spinner mientras la IA trabaja
                 with st.spinner("🧠 La IA está analizando tu producto... Esto puede tardar unos segundos."):
 
                     # ACA ES DONDE PASA LA MAGIA
-                    # El orchestrator llama a Vision → SEO + Pricing + Copy
+                    # Si hay una sola foto, mandamos los bytes directos (backwards compatible)
+                    # Si hay varias, mandamos la lista
+                    entrada_imagen = lista_bytes if len(lista_bytes) > 1 else lista_bytes[0]
+
                     producto_id, resultados = orchestrator.procesar_producto(
-                        imagen_bytes=imagen_bytes,
+                        imagen_bytes=entrada_imagen,
                         contexto_usuario=contexto
                     )
 
@@ -141,9 +157,15 @@ if pantalla == "📸 Nuevo producto":
                 if producto_id:
                     st.success(f"✅ ¡Producto procesado! ID: {producto_id}")
 
-                    # Actualizar la ruta de la imagen en la base de datos
+                    # Actualizar la ruta de las imagenes en la base de datos
+                    # Guardamos como JSON si son multiples, string si es una sola
+                    if len(archivos_guardados) == 1:
+                        path_guardar = archivos_guardados[0]
+                    else:
+                        path_guardar = json.dumps(archivos_guardados)
+                    
                     database.actualizar_producto(producto_id, {
-                        "imagen_path": nombre_archivo
+                        "imagen_path": path_guardar
                     })
 
                     # Mostrar lo que genero cada agente en columnas
@@ -267,9 +289,24 @@ elif pantalla == "✏️ Revisar productos":
                 col_img, col_datos = st.columns([1, 2])
 
                 with col_img:
-                    # Mostrar la imagen del producto
-                    if producto.get("imagen_path") and os.path.exists(producto["imagen_path"]):
-                        st.image(producto["imagen_path"], width=250)
+                    # Mostrar imagen(es) del producto
+                    imagen_path = producto.get("imagen_path", "")
+                    if imagen_path:
+                        # Detectar si son multiples imagenes (guardadas como JSON)
+                        try:
+                            paths = json.loads(imagen_path)
+                            if isinstance(paths, list):
+                                for ip in paths:
+                                    if os.path.exists(ip):
+                                        st.image(ip, width=250)
+                            else:
+                                raise ValueError
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            # Es un path simple (una sola imagen)
+                            if os.path.exists(imagen_path):
+                                st.image(imagen_path, width=250)
+                            else:
+                                st.markdown("*Imagen no disponible*")
                     else:
                         st.markdown("*Imagen no disponible*")
 
@@ -451,8 +488,19 @@ elif pantalla == "📦 Publicar":
                 col1, col2, col3 = st.columns([1, 2, 1])
 
                 with col1:
-                    if producto.get("imagen_path") and os.path.exists(producto["imagen_path"]):
-                        st.image(producto["imagen_path"], width=150)
+                    imagen_path = producto.get("imagen_path", "")
+                    if imagen_path:
+                        try:
+                            paths = json.loads(imagen_path)
+                            if isinstance(paths, list) and paths:
+                                # Mostrar solo la primera en el listado
+                                if os.path.exists(paths[0]):
+                                    st.image(paths[0], width=150)
+                            else:
+                                raise ValueError
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            if os.path.exists(imagen_path):
+                                st.image(imagen_path, width=150)
 
                 with col2:
                     st.markdown(f"### {producto.get('titulo', 'Sin título')}")

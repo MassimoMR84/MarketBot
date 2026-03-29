@@ -19,7 +19,7 @@ def procesar_producto(imagen_bytes, contexto_usuario=""):
     FUNCION PRINCIPAL — Orquesta todo el flujo end-to-end.
     
     Recibe:
-    - imagen_bytes: la foto del producto
+    - imagen_bytes: UNA foto (bytes) o LISTA de fotos ([bytes, ...])
     - contexto_usuario: texto opcional del usuario
     
     Retorna:
