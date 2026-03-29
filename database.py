@@ -230,6 +230,30 @@ def obtener_todos():
     return productos
 
 
+def eliminar_producto(producto_id):
+    """Elimina un producto de la base de datos por su ID."""
+    conexion = conectar()
+    try:
+        cursor = conexion.cursor()
+        cursor.execute("DELETE FROM productos WHERE id = ?", (producto_id,))
+        conexion.commit()
+    finally:
+        conexion.close()
+
+
+def buscar_productos(termino):
+    """Busca productos por titulo (para el buscador de la sidebar)."""
+    conexion = conectar()
+    cursor = conexion.cursor()
+    cursor.execute(
+        "SELECT * FROM productos WHERE titulo LIKE ? ORDER BY fecha_creacion DESC",
+        (f"%{termino}%",)
+    )
+    productos = [dict(row) for row in cursor.fetchall()]
+    conexion.close()
+    return productos
+
+
 # ============================================================
 # Si ejecutan este archivo solo (python database.py),
 # crea las tablas. Util para la primera vez.
