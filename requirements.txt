@@ -4,8 +4,11 @@ anthropic==0.42.0
 # Interfaz web
 streamlit==1.41.1
 
-# HTTP requests (para MercadoLibre API)
+# HTTP requests (para Google Shopping scraping)
 requests==2.32.3
+
+# Parseo de HTML (para extraer precios de Google Shopping)
+beautifulsoup4==4.12.3
 
 # Manejo de imagenes
 Pillow==11.1.0

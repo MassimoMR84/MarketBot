@@ -180,12 +180,16 @@ if pantalla == "📸 Nuevo producto":
                         pricing_r = resultados.get("pricing", {})
 
                         # Indicar fuente de datos
-                        if pricing_r.get("fuente") == "estimacion IA":
-                            st.caption("⚠️ Precios estimados por IA (MeLi API no disponible)")
+                        fuente = pricing_r.get("fuente", "")
+                        if fuente == "sin datos":
+                            st.caption("⚠️ No se pudieron obtener precios reales")
                             if pricing_r.get("nota"):
                                 st.caption(f"ℹ️ {pricing_r.get('nota')}")
                         elif pricing_r.get("productos_analizados", 0) > 0:
-                            st.caption(f"✅ Datos reales de MercadoLibre ({pricing_r.get('productos_analizados')} productos analizados)")
+                            pais = pricing_r.get("pais", "")
+                            fuente_nombre = pricing_r.get("fuente", "web")
+                            label_fuente = f"{fuente_nombre} ({pais})" if pais else fuente_nombre
+                            st.caption(f"✅ Datos reales de {label_fuente} ({pricing_r.get('productos_analizados')} productos analizados)")
 
                         st.markdown(f"**Precio sugerido:** ${pricing_r.get('precio_sugerido', 'N/A')}")
                         st.markdown(f"**Rango:** ${pricing_r.get('precio_minimo', 0)} — ${pricing_r.get('precio_maximo', 0)}")
@@ -305,12 +309,14 @@ elif pantalla == "✏️ Revisar productos":
                     # Mostrar fuente de datos
                     try:
                         datos_m = json.loads(producto.get("datos_mercado", "{}"))
-                        if datos_m.get("fuente") == "estimacion IA":
-                            st.caption("⚠️ Precios estimados por IA (MeLi API no disponible)")
+                        if datos_m.get("fuente") == "sin datos":
+                            st.caption("⚠️ No se pudieron obtener precios reales")
                             if datos_m.get("nota"):
                                 st.caption(f"ℹ️ {datos_m['nota']}")
+                        elif datos_m.get("fuente"):
+                            st.caption(f"✅ Datos reales de {datos_m.get('fuente')}")
                         else:
-                            st.caption("✅ Datos reales de MercadoLibre")
+                            st.caption("ℹ️ Fuente de precios no especificada")
                     except (json.JSONDecodeError, TypeError):
                         pass
 

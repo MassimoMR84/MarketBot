@@ -1,151 +1,173 @@
 # ============================================================
 # agents/pricing.py — Pricing Node (El analista de mercado)
 # ============================================================
-# Este agente hace DOS cosas:
-# 1. Busca productos similares en MercadoLibre (API publica)
-# 2. Analiza los precios y da recomendaciones
+# Este agente busca precios REALES scrapeando la web publica
+# de marketplaces. No usa APIs privadas ni tokens.
 #
-# La busqueda en MeLi es PUBLICA (no necesita autenticacion)
-# Solo la publicacion necesita login.
+# Flujo: Scraping web → error honesto si falla.
+# No inventamos precios. Si no hay datos, lo decimos.
+#
+# Arquitectura multi-plataforma: cada marketplace tiene su
+# funcion de scraping. Para agregar uno nuevo, solo hay que
+# crear una funcion buscar_PLATAFORMA() y agregarla al dict.
 # ============================================================
 
 import requests
 import json
-import anthropic
+import re
+from bs4 import BeautifulSoup
 import config
 
+# ============================================================
+# CONFIGURACION POR PLATAFORMA / PAIS
+# ============================================================
 
-def obtener_token_app():
-    """
-    Obtiene un token de aplicacion (sin usuario) para buscar en MeLi.
-    Esto es diferente al OAuth del usuario — es solo para leer datos.
-    """
-    try:
-        respuesta = requests.post(
-            "https://api.mercadolibre.com/oauth/token",
-            json={
-                "grant_type": "client_credentials",
-                "client_id": config.APP_ID,
-                "client_secret": config.APP_SECRET,
-            },
-            timeout=10
-        )
-        if respuesta.status_code == 200:
-            return respuesta.json().get("access_token")
-    except requests.RequestException:
-        pass
-    return None
+SITE_CONFIG = {
+    "MLA": {
+        "url_busqueda": "https://listado.mercadolibre.com.ar/{}",
+        "moneda": "ARS",
+        "pais": "Argentina",
+        "plataforma": "MercadoLibre",
+    },
+    "MLB": {
+        "url_busqueda": "https://lista.mercadolivre.com.br/{}",
+        "moneda": "BRL",
+        "pais": "Brasil",
+        "plataforma": "MercadoLivre",
+    },
+    "MLC": {
+        "url_busqueda": "https://listado.mercadolibre.cl/{}",
+        "moneda": "CLP",
+        "pais": "Chile",
+        "plataforma": "MercadoLibre",
+    },
+    "MLM": {
+        "url_busqueda": "https://listado.mercadolibre.com.mx/{}",
+        "moneda": "MXN",
+        "pais": "Mexico",
+        "plataforma": "MercadoLibre",
+    },
+    "MCO": {
+        "url_busqueda": "https://listado.mercadolibre.com.co/{}",
+        "moneda": "COP",
+        "pais": "Colombia",
+        "plataforma": "MercadoLibre",
+    },
+    "MLU": {
+        "url_busqueda": "https://listado.mercadolibre.com.uy/{}",
+        "moneda": "UYU",
+        "pais": "Uruguay",
+        "plataforma": "MercadoLibre",
+    },
+    "MPE": {
+        "url_busqueda": "https://listado.mercadolibre.com.pe/{}",
+        "moneda": "PEN",
+        "pais": "Peru",
+        "plataforma": "MercadoLibre",
+    },
+}
 
 
-def buscar_productos_similares(nombre_producto, categoria="", limite=20):
-    """
-    Busca productos similares en MercadoLibre.
-    Intenta con token de app, si falla intenta sin token.
-    """
-    url = f"https://api.mercadolibre.com/sites/{config.MELI_SITE_ID}/search"
+def obtener_config_sitio():
+    """Obtiene la config del sitio segun MELI_SITE_ID."""
+    site_id = getattr(config, "MELI_SITE_ID", "MLA")
+    return SITE_CONFIG.get(site_id, SITE_CONFIG["MLA"])
 
-    parametros = {
-        "q": nombre_producto,
-        "limit": limite,
-        "sort": "relevance"
-    }
+
+# ============================================================
+# SCRAPING DE MERCADOLIBRE WEB
+# ============================================================
+
+def buscar_mercadolibre(query, max_resultados=48):
+    """
+    Scrapea la web publica de MercadoLibre.
+    No usa API, no necesita token. Simula un usuario buscando.
+    
+    Estructura del HTML de MeLi (verificada marzo 2026):
+    - div.poly-card = cada producto
+    - a.poly-component__title = titulo del producto
+    - div.poly-price__current > span[aria-label] = precio
+      El aria-label tiene formato: "Ahora: 9596 pesos argentinos"
+    """
+    site_config = obtener_config_sitio()
+
+    # MeLi usa guiones en la URL para espacios
+    query_url = query.replace(" ", "-")
+    url = site_config["url_busqueda"].format(query_url)
 
     headers = {
-        "User-Agent": "Listify/1.0",
-        "Accept": "application/json",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-AR,es;q=0.9,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive",
     }
 
-    # Intentar con token de app
-    token = obtener_token_app()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
     try:
-        respuesta = requests.get(url, params=parametros, headers=headers, timeout=10)
+        respuesta = requests.get(url, headers=headers, timeout=15)
         respuesta.raise_for_status()
-        datos = respuesta.json()
 
+        soup = BeautifulSoup(respuesta.text, "html.parser")
         productos = []
-        for item in datos.get("results", []):
-            productos.append({
-                "titulo": item.get("title", ""),
-                "precio": item.get("price", 0),
-                "moneda": item.get("currency_id", "ARS"),
-                "estado": item.get("condition", ""),
-                "vendidos": item.get("sold_quantity", 0),
-                "envio_gratis": item.get("shipping", {}).get("free_shipping", False),
-                "permalink": item.get("permalink", ""),
-            })
 
+        # Buscar todas las cards de producto
+        cards = soup.find_all(
+            "div",
+            class_=lambda c: c and "poly-card" in c and "poly-card__content" not in c
+        )
+
+        for card in cards:
+            # --- TITULO ---
+            titulo = ""
+            titulo_elem = card.find("a", class_="poly-component__title")
+            if titulo_elem:
+                titulo = titulo_elem.get_text(strip=True)
+
+            # --- PRECIO (via aria-label, lo mas confiable) ---
+            precio = None
+            precio_div = card.find("div", class_="poly-price__current")
+            if precio_div:
+                amount_span = precio_div.find("span", attrs={"aria-label": True})
+                if amount_span:
+                    aria = amount_span.get("aria-label", "")
+                    nums = re.findall(r"(\d+)", aria)
+                    if nums:
+                        precio = int(nums[0])
+
+            if titulo and precio and precio > 0:
+                productos.append({
+                    "titulo": titulo,
+                    "precio": precio,
+                    "moneda": site_config["moneda"],
+                    "fuente": site_config["plataforma"],
+                })
+
+            if len(productos) >= max_resultados:
+                break
+
+        print(f"   🔍 {site_config['plataforma']}: {len(productos)} resultados para '{query}'")
         return productos
 
     except requests.RequestException as e:
-        print(f"Error buscando en MeLi: {e}")
+        print(f"   ❌ Error buscando en {site_config['plataforma']}: {e}")
+        return []
+    except Exception as e:
+        print(f"   ❌ Error parseando {site_config['plataforma']}: {e}")
         return []
 
 
-def estimar_precios_con_ia(atributos):
-    """
-    PLAN B: Si MeLi API no responde, le pedimos a Claude
-    que estime precios basandose en su conocimiento del
-    mercado argentino. No es tan preciso como datos reales
-    pero es MUCHO mejor que mostrar ceros.
-    """
-    info = json.dumps(atributos, ensure_ascii=False, indent=2)
-
-    prompt = f"""Sos un experto en ecommerce en Argentina, especificamente en MercadoLibre.
-
-Necesito que estimes los precios de mercado para este producto en PESOS ARGENTINOS (ARS):
-
-{info}
-
-Basandote en tu conocimiento del mercado argentino actual, estima:
-- precio_minimo: el precio mas bajo al que se vende algo asi
-- precio_maximo: el precio mas alto razonable
-- precio_promedio: el precio tipico
-- precio_mediana: el precio donde esta la mayoria de ventas
-- precio_sugerido: el precio al que VOS lo publicarias para vender rapido
-
-Responde UNICAMENTE con JSON valido (sin texto, sin markdown):
-{{
-    "precio_minimo": 0,
-    "precio_maximo": 0,
-    "precio_promedio": 0,
-    "precio_mediana": 0,
-    "precio_sugerido": 0,
-    "fuente": "estimacion IA",
-    "nota": "breve justificacion de 1 linea"
-}}
-
-Solo numeros enteros, sin decimales, sin simbolo $."""
-
-    try:
-        cliente = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-        mensaje = cliente.messages.create(
-            model=config.CLAUDE_MODEL,
-            max_tokens=256,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        respuesta = mensaje.content[0].text.strip()
-        if respuesta.startswith("```"):
-            respuesta = respuesta.split("\n", 1)[1]
-        if respuesta.endswith("```"):
-            respuesta = respuesta.rsplit("```", 1)[0]
-
-        return json.loads(respuesta.strip())
-
-    except Exception as e:
-        print(f"Error estimando precios con IA: {e}")
-        return None
-
+# ============================================================
+# ESTADISTICAS Y PRECIO SUGERIDO
+# ============================================================
 
 def calcular_estadisticas(productos):
     """
     Calcula estadisticas basicas de los precios encontrados.
-    Esto es matematica simple, no necesita IA.
-    
-    Retorna: dict con min, max, promedio, mediana
+    Filtra outliers para dar datos mas representativos.
     """
     if not productos:
         return {
@@ -156,7 +178,7 @@ def calcular_estadisticas(productos):
             "cantidad_encontrados": 0
         }
 
-    precios = [p["precio"] for p in productos if p["precio"] > 0]
+    precios = [p["precio"] for p in productos if p.get("precio", 0) > 0]
 
     if not precios:
         return {
@@ -170,7 +192,16 @@ def calcular_estadisticas(productos):
     precios.sort()
     n = len(precios)
 
-    # La mediana es el valor del medio cuando ordenas de menor a mayor
+    # Filtrar outliers: sacar el 10% mas extremo de cada punta
+    if n >= 5:
+        corte = max(1, n // 10)
+        precios_filtrados = precios[corte:-corte]
+        if precios_filtrados:
+            precios = precios_filtrados
+
+    n = len(precios)
+
+    # Mediana
     if n % 2 == 0:
         mediana = (precios[n // 2 - 1] + precios[n // 2]) / 2
     else:
@@ -185,6 +216,27 @@ def calcular_estadisticas(productos):
     }
 
 
+def sugerir_precio(stats):
+    """
+    Sugiere un precio competitivo basado en estadisticas.
+    5% debajo de la mediana para ser competitivo.
+    Sin IA — formula simple y predecible.
+    """
+    if stats["cantidad_encontrados"] == 0 or stats["precio_mediana"] == 0:
+        return None
+
+    sugerido = round(stats["precio_mediana"] * 0.95, -1)
+
+    if sugerido < stats["precio_minimo"]:
+        sugerido = stats["precio_minimo"]
+
+    return sugerido
+
+
+# ============================================================
+# FUNCION PRINCIPAL
+# ============================================================
+
 def analizar_precios(atributos):
     """
     FUNCION PRINCIPAL del Pricing Node.
@@ -194,13 +246,12 @@ def analizar_precios(atributos):
     
     Retorna:
     - Diccionario con estadisticas y precio sugerido
+      (compatible con app.py y orchestrator.py)
     """
 
     # 1. Armar lista de busquedas inteligentes
-    # Usamos las sugerencias del Vision Node si existen
     busquedas = atributos.get("busqueda_marketplace", [])
-    
-    # Si Vision no dio sugerencias, armamos busquedas nosotros
+
     if not busquedas:
         nombre = atributos.get("nombre_producto", "producto")
         marca = atributos.get("marca", "")
@@ -211,57 +262,48 @@ def analizar_precios(atributos):
             f"{nombre} {categoria}".strip(),
         ]
 
-    # 2. Probar cada busqueda hasta encontrar resultados con precios
+    # 2. Probar cada busqueda hasta encontrar resultados
     productos_encontrados = []
     query_usada = ""
 
     for query in busquedas:
         if not query:
             continue
-        productos_encontrados = buscar_productos_similares(query)
+        productos_encontrados = buscar_mercadolibre(query)
         stats_temp = calcular_estadisticas(productos_encontrados)
-        
-        # Si encontramos productos con precios reales, usamos estos
+
         if stats_temp["cantidad_encontrados"] > 0 and stats_temp["precio_promedio"] > 0:
             query_usada = query
-            print(f"   📊 Pricing: encontro {stats_temp['cantidad_encontrados']} resultados con '{query}'")
+            print(f"   📊 Pricing: {stats_temp['cantidad_encontrados']} precios reales con '{query}'")
             break
-    
+
+    # 3. Si no encontramos nada, error honesto
     if not query_usada:
-        query_usada = busquedas[0] if busquedas else "producto"
-        print(f"   ⚠️ Pricing: MeLi API no disponible, usando estimacion IA...")
-
-        # PLAN B: Estimar precios con Claude
-        estimacion = estimar_precios_con_ia(atributos)
-        if estimacion:
-            print(f"   📊 Pricing (IA): estimado ${estimacion.get('precio_sugerido', '?')}")
-            resultado = {
-                "precio_sugerido": estimacion.get("precio_sugerido"),
-                "precio_minimo": estimacion.get("precio_minimo", 0),
-                "precio_maximo": estimacion.get("precio_maximo", 0),
-                "precio_promedio": estimacion.get("precio_promedio", 0),
-                "precio_mediana": estimacion.get("precio_mediana", 0),
-                "productos_analizados": 0,
-                "query_busqueda": query_usada,
-                "fuente": estimacion.get("fuente", "estimacion IA"),
-                "nota": estimacion.get("nota", ""),
-                "datos_mercado": {
-                    "fuente": "estimacion IA",
-                    "nota": estimacion.get("nota", "")
-                }
+        print("   ⚠️ Pricing: no se pudieron obtener precios reales")
+        return {
+            "precio_sugerido": None,
+            "precio_minimo": 0,
+            "precio_maximo": 0,
+            "precio_promedio": 0,
+            "precio_mediana": 0,
+            "productos_analizados": 0,
+            "query_busqueda": busquedas[0] if busquedas else "producto",
+            "fuente": "sin datos",
+            "nota": "No se pudieron obtener precios. Ingresa un precio manualmente.",
+            "datos_mercado": {
+                "fuente": "sin datos",
+                "nota": "No se pudieron obtener precios reales."
             }
-            return resultado
+        }
 
-    # 3. Calcular estadisticas
+    # 4. Calcular estadisticas
     stats = calcular_estadisticas(productos_encontrados)
 
-    # 3. Si encontramos productos, pedirle a Claude que sugiera un precio
-    if stats["cantidad_encontrados"] > 0:
-        precio_sugerido = sugerir_precio_con_ia(atributos, stats, productos_encontrados[:5])
-    else:
-        precio_sugerido = None
+    # 5. Sugerir precio (sin IA)
+    precio_sugerido = sugerir_precio(stats)
 
-    # 4. Armar el resultado final
+    # 6. Resultado final
+    site_config = obtener_config_sitio()
     resultado = {
         "precio_sugerido": precio_sugerido,
         "precio_minimo": stats["precio_minimo"],
@@ -270,7 +312,11 @@ def analizar_precios(atributos):
         "precio_mediana": stats["precio_mediana"],
         "productos_analizados": stats["cantidad_encontrados"],
         "query_busqueda": query_usada,
+        "fuente": site_config["plataforma"],
+        "moneda": site_config["moneda"],
+        "pais": site_config["pais"],
         "datos_mercado": {
+            "fuente": site_config["plataforma"],
             "top_5_resultados": productos_encontrados[:5]
         }
     }
@@ -278,52 +324,7 @@ def analizar_precios(atributos):
     return resultado
 
 
-def sugerir_precio_con_ia(atributos, stats, top_productos):
-    """
-    Usa Claude para analizar los datos de mercado y sugerir
-    el MEJOR precio para maximizar ventas.
-    """
-    info = json.dumps({
-        "producto": atributos,
-        "estadisticas": stats,
-        "competencia": top_productos
-    }, ensure_ascii=False, indent=2)
-
-    prompt = f"""Sos un experto en pricing para ecommerce en Argentina (MercadoLibre).
-
-Analiza estos datos de mercado y sugeri UN precio optimo.
-
-DATOS:
-{info}
-
-Considera:
-- El estado del producto (nuevo vs usado)
-- La competencia directa
-- Que el precio sea competitivo pero rentable
-- Los productos mas vendidos suelen estar cerca de la mediana
-
-Responde UNICAMENTE con un numero (el precio sugerido en ARS).
-Sin texto, sin simbolo $, sin puntos de miles. Solo el numero.
-Ejemplo: 25500"""
-
-    try:
-        cliente = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-        mensaje = cliente.messages.create(
-            model=config.CLAUDE_MODEL,
-            max_tokens=50,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        precio_texto = mensaje.content[0].text.strip()
-        # Limpiar cualquier caracter no numerico
-        precio_limpio = "".join(c for c in precio_texto if c.isdigit() or c == ".")
-        return float(precio_limpio) if precio_limpio else stats["precio_mediana"]
-
-    except Exception:
-        # Si falla la IA, usamos la mediana como precio sugerido
-        return stats["precio_mediana"]
-
-
 if __name__ == "__main__":
-    print("Pricing Node listo.")
+    site = obtener_config_sitio()
+    print(f"Pricing Node listo — {site['plataforma']} ({site['pais']})")
     print("Para probar, usa: analizar_precios(atributos_dict)")
