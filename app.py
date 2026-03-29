@@ -106,6 +106,31 @@ if pantalla == "📸 Nuevo producto":
         max_chars=500
     )
 
+    # --- Audio como contexto alternativo ---
+    st.markdown("**O describilo por audio:**")
+    tab_grabar, tab_subir = st.tabs(["🎙️ Grabar audio", "📁 Subir archivo de audio"])
+
+    audio_bytes = None
+
+    with tab_grabar:
+        audio_grabado = st.audio_input(
+            "Grabá una descripción del producto",
+            help="Presioná para grabar y describí tu producto: qué es, marca, estado, etc."
+        )
+        if audio_grabado:
+            audio_bytes = audio_grabado.getvalue()
+
+    with tab_subir:
+        audio_subido = st.file_uploader(
+            "Subí un audio describiendo el producto",
+            type=["wav", "mp3", "m4a", "ogg", "webm"],
+            help="Formatos aceptados: WAV, MP3, M4A, OGG, WEBM",
+            key="audio_file"
+        )
+        if audio_subido:
+            audio_bytes = audio_subido.getvalue()
+            st.audio(audio_bytes)
+
     # --- Mostrar preview de las imagenes ---
     if imagenes:
         # Mostrar previews en columnas
@@ -140,6 +165,44 @@ if pantalla == "📸 Nuevo producto":
                 archivos_guardados.append(nombre_archivo)
 
             if not error_tamano:
+                # Si hay audio, transcribirlo y agregarlo al contexto
+                contexto_final = contexto
+                if audio_bytes:
+                    with st.spinner("🎤 Transcribiendo audio..."):
+                        try:
+                            import speech_recognition as sr
+                            import io
+                            import wave
+
+                            recognizer = sr.Recognizer()
+
+                            # Streamlit audio_input devuelve WAV
+                            # Convertir bytes a AudioData para speech_recognition
+                            audio_file = io.BytesIO(audio_bytes)
+
+                            with sr.AudioFile(audio_file) as source:
+                                audio_data = recognizer.record(source)
+
+                            # Usar Google Speech-to-Text (gratis, sin API key)
+                            transcripcion = recognizer.recognize_google(
+                                audio_data, language="es-AR"
+                            )
+
+                            st.caption(f"🎤 Audio transcripto: *\"{transcripcion}\"*")
+
+                            # Combinar con contexto escrito
+                            if contexto_final:
+                                contexto_final = f"{contexto_final}\n\nAudio del vendedor: {transcripcion}"
+                            else:
+                                contexto_final = transcripcion
+
+                        except sr.UnknownValueError:
+                            st.warning("⚠️ No se pudo entender el audio. Intentá hablar más claro o más cerca del micrófono.")
+                        except sr.RequestError as e:
+                            st.warning(f"⚠️ Error al transcribir: {e}")
+                        except Exception as e:
+                            st.warning(f"⚠️ No se pudo transcribir el audio: {e}")
+
                 # Mostrar un spinner mientras la IA trabaja
                 with st.spinner("🧠 La IA está analizando tu producto... Esto puede tardar unos segundos."):
 
@@ -150,7 +213,7 @@ if pantalla == "📸 Nuevo producto":
 
                     producto_id, resultados = orchestrator.procesar_producto(
                         imagen_bytes=entrada_imagen,
-                        contexto_usuario=contexto
+                        contexto_usuario=contexto_final
                     )
 
                 # --- Mostrar resultados ---
@@ -432,52 +495,7 @@ elif pantalla == "📦 Publicar":
     st.title("📦 Publicar en MercadoLibre")
     st.markdown("Productos aprobados y listos para subir.")
 
-    # ==== PASO 1: Autenticacion con MercadoLibre ====
-    # El usuario necesita conectar su cuenta de MeLi UNA vez.
-    # Despues el token queda guardado en la sesion.
-
-    from meli import auth, api
-
-    # Verificar si ya tenemos token
-    # st.session_state es como una "memoria" de Streamlit
-    # que sobrevive entre clicks del usuario
-    if "meli_token" not in st.session_state:
-        st.session_state.meli_token = None
-
-    # Verificar si MeLi nos mando un codigo en la URL
-    # (esto pasa cuando el usuario vuelve de loguearse en MeLi)
-    params = st.query_params
-    codigo_meli = params.get("code")
-
-    if codigo_meli and not st.session_state.meli_token:
-        with st.spinner("Conectando con MercadoLibre..."):
-            token_data = auth.obtener_token(codigo_meli)
-            if token_data and "access_token" in token_data:
-                st.session_state.meli_token = token_data["access_token"]
-                st.success("✅ ¡Cuenta de MercadoLibre conectada!")
-                # Limpiar el codigo de la URL
-                st.query_params.clear()
-                st.rerun()
-            else:
-                st.error("❌ Error conectando con MercadoLibre. Intentá de nuevo.")
-
-    # Mostrar estado de conexion y boton de login
-    if not st.session_state.meli_token:
-        st.warning("⚠️ Necesitás conectar tu cuenta de MercadoLibre para publicar.")
-        url_auth = auth.obtener_url_autorizacion()
-        st.link_button(
-            "🔗 Conectar con MercadoLibre",
-            url_auth,
-            type="primary",
-            use_container_width=True
-        )
-        st.markdown("*Se va a abrir MercadoLibre para que inicies sesión y autorices la app.*")
-    else:
-        st.success("✅ Cuenta de MercadoLibre conectada")
-
-    st.markdown("---")
-
-    # ==== PASO 2: Mostrar productos para publicar ====
+    # ==== Mostrar productos aprobados ====
     aprobados = [p for p in database.obtener_todos() if p["estado"] == "aprobado"]
 
     if not aprobados:
@@ -493,7 +511,6 @@ elif pantalla == "📦 Publicar":
                         try:
                             paths = json.loads(imagen_path)
                             if isinstance(paths, list) and paths:
-                                # Mostrar solo la primera en el listado
                                 if os.path.exists(paths[0]):
                                     st.image(paths[0], width=150)
                             else:
@@ -508,47 +525,98 @@ elif pantalla == "📦 Publicar":
                     st.markdown(f"**CTA:** {producto.get('call_to_action', '')}")
 
                 with col3:
-                    # Solo mostrar boton si estamos conectados a MeLi
-                    if st.session_state.meli_token:
-                        if st.button(
-                            "🚀 Publicar",
-                            key=f"publicar_{producto['id']}",
-                            type="primary"
-                        ):
-                            with st.spinner("Publicando en MercadoLibre..."):
-                                token = st.session_state.meli_token
-
-                                # 1. Subir imagen
-                                imagen_id = None
-                                if producto.get("imagen_path") and os.path.exists(producto["imagen_path"]):
-                                    imagen_id = api.subir_imagen(token, producto["imagen_path"])
-
-                                # 2. Publicar producto
-                                resultado = api.publicar_producto(token, producto, imagen_id)
-
-                                if resultado and resultado.get("id"):
-                                    item_id = resultado["id"]
-                                    permalink = resultado.get("permalink", "")
-                                    database.marcar_publicado(producto["id"], item_id)
-                                    st.success(f"✅ ¡Publicado! ID: {item_id}")
-                                    if permalink:
-                                        st.markdown(f"[🔗 Ver publicación en MercadoLibre]({permalink})")
-                                    st.rerun()
-                                else:
-                                    error_msg = resultado.get("message", "Error desconocido") if resultado else "Sin respuesta"
-                                    st.error(f"❌ Error: {error_msg}")
-                    else:
-                        st.markdown("*Conectá MeLi arriba*")
+                    if st.button(
+                        "🚀 Publicar",
+                        key=f"publicar_{producto['id']}",
+                        type="primary"
+                    ):
+                        # Marcar como publicado (simulado por ahora)
+                        database.marcar_publicado(producto["id"], f"SIM-{producto['id']}")
+                        st.session_state[f"recien_publicado_{producto['id']}"] = True
+                        st.rerun()
 
                 st.markdown("---")
 
-    # ==== Productos ya publicados ====
+    # ==== Productos ya publicados — Pantalla de exito ====
     publicados = [p for p in database.obtener_todos() if p["estado"] == "publicado"]
     if publicados:
-        st.subheader("✅ Ya publicados")
+        st.markdown("---")
+        st.subheader("✅ Productos publicados")
+
         for producto in publicados:
-            meli_id = producto.get("meli_item_id", "")
-            st.markdown(
-                f"- **{producto.get('titulo', '')}** — "
-                f"[Ver en MercadoLibre](https://articulo.mercadolibre.com.ar/{meli_id})"
-            )
+            # Detectar si se acaba de publicar para mostrar celebracion
+            recien = st.session_state.get(f"recien_publicado_{producto['id']}", False)
+
+            if recien:
+                # ============================
+                # PANTALLA DE EXITO / CELEBRACION
+                # ============================
+                st.balloons()
+
+                st.markdown("---")
+                st.markdown(
+                    "<h2 style='text-align: center; color: #39ffb0;'>"
+                    "🎉 ¡Publicación exitosa!"
+                    "</h2>",
+                    unsafe_allow_html=True
+                )
+                st.markdown(
+                    "<p style='text-align: center;'>"
+                    f"Tu producto <strong>\"{producto.get('titulo', '')}\"</strong> ya está listo."
+                    "</p>",
+                    unsafe_allow_html=True
+                )
+
+                # Vista previa final
+                st.markdown("#### Vista previa final")
+                prev_col1, prev_col2 = st.columns([1, 2])
+
+                with prev_col1:
+                    imagen_path = producto.get("imagen_path", "")
+                    if imagen_path:
+                        try:
+                            paths = json.loads(imagen_path)
+                            if isinstance(paths, list) and paths:
+                                if os.path.exists(paths[0]):
+                                    st.image(paths[0], width=200)
+                            else:
+                                raise ValueError
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            if os.path.exists(imagen_path):
+                                st.image(imagen_path, width=200)
+
+                with prev_col2:
+                    st.markdown(f"**Título:** {producto.get('titulo', 'Sin título')}")
+                    st.markdown(f"**Precio:** ${producto.get('precio_sugerido', 0):,.0f}")
+                    desc = producto.get("descripcion_marketing", "")
+                    if desc:
+                        st.markdown(f"**Descripción:** {desc[:150]}...")
+                    st.markdown(f"**CTA:** {producto.get('call_to_action', '')}")
+
+                st.markdown("---")
+
+                if st.button("➕ Crear otra publicación", type="primary", use_container_width=True, key=f"otra_{producto['id']}"):
+                    # Limpiar flag de recien publicado
+                    st.session_state[f"recien_publicado_{producto['id']}"] = False
+                    st.rerun()
+
+            else:
+                # Producto publicado anteriormente — mostrar resumen simple
+                with st.expander(f"📦 {producto.get('titulo', 'Sin título')} — PUBLICADO"):
+                    res_col1, res_col2 = st.columns([1, 3])
+                    with res_col1:
+                        imagen_path = producto.get("imagen_path", "")
+                        if imagen_path:
+                            try:
+                                paths = json.loads(imagen_path)
+                                if isinstance(paths, list) and paths:
+                                    if os.path.exists(paths[0]):
+                                        st.image(paths[0], width=120)
+                                else:
+                                    raise ValueError
+                            except (json.JSONDecodeError, ValueError, TypeError):
+                                if os.path.exists(imagen_path):
+                                    st.image(imagen_path, width=120)
+                    with res_col2:
+                        st.markdown(f"**Precio:** ${producto.get('precio_sugerido', 0):,.0f}")
+                        st.markdown(f"**Estado:** ✅ Publicado")

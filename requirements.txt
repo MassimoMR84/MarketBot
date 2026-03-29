@@ -12,3 +12,6 @@ beautifulsoup4==4.12.3
 
 # Manejo de imagenes
 Pillow==11.1.0
+
+# Transcripcion de audio (usa Google Speech-to-Text gratis)
+SpeechRecognition==3.11.0
