@@ -1,5 +1,4 @@
-# ========== SECRETOS — NUNCA subir ==========
-config.py
+
 
 # ========== Base de datos local ==========
 *.db
